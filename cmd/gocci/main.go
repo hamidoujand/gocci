@@ -42,7 +42,7 @@ func run(log *slog.Logger) error {
 	// Server setup
 	server := &http.Server{
 		Addr:         ":8000",
-		Handler:      mux,
+		Handler:      logMiddleware(log)(mux),
 		ReadTimeout:  time.Second * 10,
 		WriteTimeout: time.Second * 10,
 		IdleTimeout:  time.Second * 60,
@@ -108,4 +108,13 @@ func logHandler(w io.Writer, build string, level slog.Level, attrs ...slog.Attr)
 	}
 	handler = handler.WithAttrs(attrs)
 	return handler
+}
+
+func logMiddleware(log *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.Info("request", "remoteAddr", r.RemoteAddr, "path", r.URL.Path, "method", r.Method)
+			next.ServeHTTP(w, r)
+		})
+	}
 }
