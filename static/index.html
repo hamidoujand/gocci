@@ -9,6 +9,24 @@
 
 <body>
     <h1>Gocci Distributed Chat Server</h1>
+    <input type="text" id="message" placeholder="Type a message...">
+    <button onclick="sendMessage()">Send</button>
+    <div id="output"></div>
+
+    <script>
+        const ws = new WebSocket("ws://localhost:8000/ws")
+        const output = document.getElementById("output")
+
+        ws.onmessage = (event) => {
+            output.innerHTML += `<p>${event.data}</p>`
+        }
+
+        function sendMessage() {
+            const message = document.getElementById("message").value
+            ws.send(message)
+            document.getElementById("message").value = ""
+        }
+    </script>
 </body>
 
 </html>

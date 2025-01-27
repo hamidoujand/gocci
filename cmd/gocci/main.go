@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"syscall"
 	"time"
+
+	"github.com/hamidoujand/gocci/api/websocket"
 )
 
 var build string = "development"
@@ -34,10 +36,15 @@ func run(log *slog.Logger) error {
 	log.Info("startup", "GOMAXPROCS", runtime.GOMAXPROCS(0))
 
 	//==========================================================================
+	// Websocket Pool
+	pool := websocket.NewPool(log)
+	//==========================================================================
 	// Mux setup
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.Dir("./static")))
 
+	//websocket endpoint
+	mux.HandleFunc("/ws", pool.HandleWebsocket)
 	//==========================================================================
 	// Server setup
 	server := &http.Server{
