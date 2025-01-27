@@ -1,12 +1,14 @@
 package websocket
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"github.com/redis/go-redis/v9"
 )
 
 var upgrader = websocket.Upgrader{
@@ -25,13 +27,19 @@ type Pool struct {
 	clients map[*Client]bool
 	mu      sync.Mutex
 	log     *slog.Logger
+	redis   *redis.Client
+	//redis pubsub connection
+	pubsub  *redis.PubSub
+	channel string
 }
 
 // NewPool creates a new pool.
-func NewPool(l *slog.Logger) *Pool {
+func NewPool(l *slog.Logger, redisClient *redis.Client, channel string) *Pool {
 	return &Pool{
 		clients: make(map[*Client]bool),
 		log:     l,
+		redis:   redisClient,
+		channel: channel,
 	}
 }
 
@@ -56,7 +64,12 @@ func (p *Pool) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 			p.log.Error("read message", "err", err.Error())
 			break
 		}
-		p.broadcast(msg)
+
+		// When a message is received from a client, it’s published to Redis.
+		// All server instances subscribed to the Redis channel receive the message and broadcast it to their local clients.
+		if err := p.redis.Publish(r.Context(), p.channel, msg).Err(); err != nil {
+			p.log.Error("publish message", "err", err.Error())
+		}
 	}
 }
 
@@ -83,4 +96,25 @@ func (p *Pool) broadcast(msg []byte) {
 			p.log.Error("broadcast message", "err", err.Error())
 		}
 	}
+}
+
+// StartRedisListener start listening for redis pub/sub in background.
+func (p *Pool) StartRedisListener(ctx context.Context) {
+	p.pubsub = p.redis.Subscribe(ctx, p.channel)
+
+	//goroutine to receive messages from redis
+	go func() {
+		for msg := range p.pubsub.Channel() {
+			//broadcast
+			p.broadcast([]byte(msg.Payload))
+		}
+	}()
+}
+
+// Close closes the pubsub channel.
+func (p *Pool) Close() error {
+	if err := p.pubsub.Close(); err != nil {
+		return fmt.Errorf("closing pubsub: %w", err)
+	}
+	return nil
 }

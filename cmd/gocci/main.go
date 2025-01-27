@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hamidoujand/gocci/api/websocket"
+	"github.com/redis/go-redis/v9"
 )
 
 var build string = "development"
@@ -34,10 +35,31 @@ func run(log *slog.Logger) error {
 	//==========================================================================
 	// GOMAXPROCS
 	log.Info("startup", "GOMAXPROCS", runtime.GOMAXPROCS(0))
+	//==========================================================================
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		return fmt.Errorf("redis address is a required env")
+	}
+	// Redis setup
+	redisOpts := redis.Options{
+		Addr:     redisAddr, //docker container name
+		Password: "",
+		DB:       0,
+	}
+	redisClient := redis.NewClient(&redisOpts)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	defer cancel()
 
+	status := redisClient.Ping(ctx)
+	if status.Err() != nil {
+		return fmt.Errorf("ping: %w", status.Err())
+	}
 	//==========================================================================
 	// Websocket Pool
-	pool := websocket.NewPool(log)
+	pool := websocket.NewPool(log, redisClient, "chat_messages")
+	pool.StartRedisListener(context.Background())
+	defer pool.Close()
+
 	//==========================================================================
 	// Mux setup
 	mux := http.NewServeMux()
