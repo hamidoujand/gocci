@@ -14,6 +14,7 @@ services:
         BUILD_REF: "0.0.1"
     environment:
       - REDIS_ADDR=redis:6379
+      - JWT_SECRET="some-secret-only-for-dev"
     depends_on:
       - redis
     ports:

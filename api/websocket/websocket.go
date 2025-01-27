@@ -2,12 +2,14 @@ package websocket
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"github.com/hamidoujand/gocci/internal/auth"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -19,7 +21,8 @@ var upgrader = websocket.Upgrader{
 
 // Client represents a chat client in our server
 type Client struct {
-	conn *websocket.Conn
+	conn     *websocket.Conn
+	username string
 }
 
 // Pool represents a pool of clients.
@@ -31,20 +34,37 @@ type Pool struct {
 	//redis pubsub connection
 	pubsub  *redis.PubSub
 	channel string
+	//TODO: track online users
+	onlineUsers *sync.Map //track online users (thread-safe)
+	jwtKey      string
 }
 
 // NewPool creates a new pool.
-func NewPool(l *slog.Logger, redisClient *redis.Client, channel string) *Pool {
+func NewPool(l *slog.Logger, redisClient *redis.Client, channel string, jwtKey string) *Pool {
 	return &Pool{
 		clients: make(map[*Client]bool),
 		log:     l,
 		redis:   redisClient,
 		channel: channel,
+		jwtKey:  jwtKey,
 	}
 }
 
 // HandleWebsocket upgrades the http conn to websocket conn.
 func (p *Pool) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
+	//Extract jwt token from query params
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	claims, err := auth.ValidateToken(token, p.jwtKey)
+	if err != nil {
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		p.log.Error("upgrade ws", "err", err)
@@ -54,9 +74,13 @@ func (p *Pool) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 
 	defer conn.Close()
 
-	client := Client{conn: conn}
+	client := Client{conn: conn, username: claims.Username}
+
 	p.addClient(&client)
 	defer p.deleteClient(&client)
+
+	//broadcase a new user joined
+	p.broadcastSystemMessage(fmt.Sprintf("%s joined the chat", client.username))
 
 	for {
 		_, msg, err := conn.ReadMessage()
@@ -65,11 +89,23 @@ func (p *Pool) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		// When a message is received from a client, it’s published to Redis.
-		// All server instances subscribed to the Redis channel receive the message and broadcast it to their local clients.
-		if err := p.redis.Publish(r.Context(), p.channel, msg).Err(); err != nil {
-			p.log.Error("publish message", "err", err.Error())
-		}
+		p.publishMessages(r.Context(), client.username, string(msg))
+	}
+}
+
+func (p *Pool) publishMessages(ctx context.Context, username, message string) {
+	msg := map[string]string{
+		"type":     "message",
+		"username": username,
+		"content":  message,
+	}
+
+	bs, _ := json.Marshal(msg)
+
+	// When a message is received from a client, it’s published to Redis.
+	// All server instances subscribed to the Redis channel receive the message and broadcast it to their local clients.
+	if err := p.redis.Publish(ctx, p.channel, bs).Err(); err != nil {
+		p.log.Error("publish message", "err", err.Error())
 	}
 }
 
@@ -117,4 +153,33 @@ func (p *Pool) Close() error {
 		return fmt.Errorf("closing pubsub: %w", err)
 	}
 	return nil
+}
+
+func (p *Pool) Login(w http.ResponseWriter, r *http.Request) {
+	username := r.FormValue("username")
+	token, err := auth.GenerateToken(username, p.jwtKey)
+	if err != nil {
+		p.log.Error("token generation", "err", err)
+		http.Error(w, "failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	resp := map[string]string{
+		"token": token,
+	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
+	}
+}
+
+func (p *Pool) broadcastSystemMessage(msg string) {
+	message := map[string]string{
+		"type":    "system",
+		"content": msg,
+	}
+
+	bs, _ := json.Marshal(message)
+	p.broadcast(bs)
 }

@@ -36,10 +36,17 @@ func run(log *slog.Logger) error {
 	// GOMAXPROCS
 	log.Info("startup", "GOMAXPROCS", runtime.GOMAXPROCS(0))
 	//==========================================================================
+	// Environment Variables
 	redisAddr := os.Getenv("REDIS_ADDR")
 	if redisAddr == "" {
-		return fmt.Errorf("redis address is a required env")
+		return fmt.Errorf("REDIS_ADDR is a required env")
 	}
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		return fmt.Errorf("JWT_SECRET is a required env")
+	}
+
+	//==========================================================================
 	// Redis setup
 	redisOpts := redis.Options{
 		Addr:     redisAddr, //docker container name
@@ -56,7 +63,7 @@ func run(log *slog.Logger) error {
 	}
 	//==========================================================================
 	// Websocket Pool
-	pool := websocket.NewPool(log, redisClient, "chat_messages")
+	pool := websocket.NewPool(log, redisClient, "chat_messages", jwtSecret)
 	pool.StartRedisListener(context.Background())
 	defer pool.Close()
 
