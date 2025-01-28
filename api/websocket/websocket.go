@@ -168,6 +168,14 @@ func (p *Pool) Close() error {
 
 func (p *Pool) Login(w http.ResponseWriter, r *http.Request) {
 	username := r.FormValue("username")
+	password := r.FormValue("password")
+
+	if err := auth.Login(r.Context(), p.redis, username, password); err != nil {
+		p.log.Error("invalid credentials", "msg", err.Error())
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
 	token, err := auth.GenerateToken(username, p.jwtKey)
 	if err != nil {
 		p.log.Error("token generation", "err", err)
@@ -179,6 +187,43 @@ func (p *Pool) Login(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]string{
 		"token": token,
 	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
+	}
+}
+
+func (p *Pool) Register(w http.ResponseWriter, r *http.Request) {
+	username := r.FormValue("username")
+	password := r.FormValue("password")
+
+	if username == "" || password == "" || len(password) < 4 {
+		http.Error(w, "username can not be empty and password must be greater that 4", http.StatusBadRequest)
+		return
+	}
+
+	if err := auth.RegisterUser(r.Context(), p.redis, username, password); err != nil {
+		p.log.Error("register failed", "err", err)
+		http.Error(w, "regiser failed", http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (p *Pool) OnlineUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := p.redis.SMembers(r.Context(), "users").Result()
+	if err != nil {
+		p.log.Error("getting online users", "err", err)
+		http.Error(w, "failed to get online users", http.StatusInternalServerError)
+		return
+	}
+
+	resp := map[string]any{
+		"count": len(users),
+		"users": users,
+	}
+
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
 		return
