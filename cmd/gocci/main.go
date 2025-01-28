@@ -74,14 +74,12 @@ func run(log *slog.Logger) error {
 
 	//websocket endpoint
 	mux.HandleFunc("/ws", pool.HandleWebsocket)
+	mux.HandleFunc("/login", pool.Login)
 	//==========================================================================
 	// Server setup
 	server := &http.Server{
-		Addr:         ":8000",
-		Handler:      logMiddleware(log)(mux),
-		ReadTimeout:  time.Second * 10,
-		WriteTimeout: time.Second * 10,
-		IdleTimeout:  time.Second * 60,
+		Addr:    ":8000",
+		Handler: logMiddleware(log)(mux),
 	}
 
 	serverErrs := make(chan error, 1)

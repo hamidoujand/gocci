@@ -13,6 +13,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+const (
+	systemMessage = "system"
+	userMessage   = "message"
+)
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(_ *http.Request) bool {
 		return true //in development allow all origins
@@ -34,9 +39,7 @@ type Pool struct {
 	//redis pubsub connection
 	pubsub  *redis.PubSub
 	channel string
-	//TODO: track online users
-	onlineUsers *sync.Map //track online users (thread-safe)
-	jwtKey      string
+	jwtKey  string
 }
 
 // NewPool creates a new pool.
@@ -61,6 +64,7 @@ func (p *Pool) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 
 	claims, err := auth.ValidateToken(token, p.jwtKey)
 	if err != nil {
+		p.log.Error("validate token", "err", err.Error())
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
@@ -76,11 +80,8 @@ func (p *Pool) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 
 	client := Client{conn: conn, username: claims.Username}
 
-	p.addClient(&client)
-	defer p.deleteClient(&client)
-
-	//broadcase a new user joined
-	p.broadcastSystemMessage(fmt.Sprintf("%s joined the chat", client.username))
+	p.addClient(r.Context(), &client)
+	defer p.deleteClient(r.Context(), &client)
 
 	for {
 		_, msg, err := conn.ReadMessage()
@@ -89,13 +90,13 @@ func (p *Pool) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		p.publishMessages(r.Context(), client.username, string(msg))
+		p.publishMessages(r.Context(), client.username, string(msg), userMessage)
 	}
 }
 
-func (p *Pool) publishMessages(ctx context.Context, username, message string) {
+func (p *Pool) publishMessages(ctx context.Context, username, message string, msgType string) {
 	msg := map[string]string{
-		"type":     "message",
+		"type":     msgType,
 		"username": username,
 		"content":  message,
 	}
@@ -109,17 +110,27 @@ func (p *Pool) publishMessages(ctx context.Context, username, message string) {
 	}
 }
 
-func (p *Pool) addClient(client *Client) {
+func (p *Pool) addClient(ctx context.Context, client *Client) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.clients[client] = true
+
+	//add user to redis set
+	p.redis.SAdd(ctx, "online_users", client.username)
+	//also broadcast it
+	p.publishMessages(ctx, client.username, fmt.Sprintf("%s, joined the chat", client.username), systemMessage)
 	p.log.Info("add client", "status", fmt.Sprintf("new client %s added", client.conn.RemoteAddr().String()))
 }
 
-func (p *Pool) deleteClient(client *Client) {
+func (p *Pool) deleteClient(ctx context.Context, client *Client) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	delete(p.clients, client)
+
+	//remove the user from redis set
+	p.redis.SRem(ctx, "online_users", client.username)
+	//also broadcast a system message
+	p.publishMessages(ctx, client.username, fmt.Sprintf("%s left the chat", client.username), systemMessage)
 	p.log.Info("delete client", "status", fmt.Sprintf("client %s removed", client.conn.RemoteAddr().String()))
 }
 
@@ -172,14 +183,4 @@ func (p *Pool) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
 		return
 	}
-}
-
-func (p *Pool) broadcastSystemMessage(msg string) {
-	message := map[string]string{
-		"type":    "system",
-		"content": msg,
-	}
-
-	bs, _ := json.Marshal(message)
-	p.broadcast(bs)
 }

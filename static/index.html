@@ -1,30 +1,67 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gocci</title>
 </head>
 
 <body>
-    <h1>Gocci Distributed Chat Server</h1>
-    <input type="text" id="message" placeholder="Type a message...">
-    <button onclick="sendMessage()">Send</button>
-    <div id="output"></div>
+    <div id="login">
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="login()">Login</button>
+    </div>
+    <div id="chat" style="display: none;">
+        <div id="messages"></div>
+        <input type="text" id="message" placeholder="Type a message...">
+        <button onclick="sendMessage()">Send</button>
+    </div>
 
     <script>
-        const ws = new WebSocket("ws://localhost:8000/ws")
-        const output = document.getElementById("output")
+        let ws;
+        let token;
 
-        ws.onmessage = (event) => {
-            output.innerHTML += `<p>${event.data}</p>`
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            const response = await fetch('/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `username=${username}&password=${password}`
+            });
+
+            if (!response.ok) {
+                alert('Login failed');
+                return;
+            }
+
+            const data = await response.json();
+            token = data.token;
+            document.getElementById('login').style.display = 'none';
+            document.getElementById('chat').style.display = 'block';
+
+            // Connect to WebSocket with token
+            ws = new WebSocket(`ws://localhost/ws?token=${token}`);
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                const messages = document.getElementById('messages');
+                var username = ""
+                if (msg.type !== "system") {
+                    username = msg.username
+                }
+                if (username !== "") {
+                    messages.innerHTML += `<p><strong>${username}</strong>: ${msg.content}</p>`;
+                } else {
+                    messages.innerHTML += `<p><strong>${msg.content}</strong></p>`;
+                }
+            };
         }
 
         function sendMessage() {
-            const message = document.getElementById("message").value
-            ws.send(message)
-            document.getElementById("message").value = ""
+            const message = document.getElementById('message').value;
+            ws.send(message);
+            document.getElementById('message').value = '';
         }
     </script>
 </body>
