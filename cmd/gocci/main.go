@@ -75,6 +75,9 @@ func run(log *slog.Logger) error {
 	//websocket endpoint
 	mux.HandleFunc("/ws", pool.HandleWebsocket)
 	mux.HandleFunc("/login", pool.Login)
+	mux.HandleFunc("/register", pool.Register)
+	mux.HandleFunc("/online-users", pool.OnlineUsers)
+
 	//==========================================================================
 	// Server setup
 	server := &http.Server{

@@ -2,28 +2,192 @@
 <html>
 
 <head>
-    <title>Gocci</title>
+    <title>Gocci Chat</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        #auth-forms {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .auth-form {
+            margin-bottom: 15px;
+        }
+
+        input[type="text"],
+        input[type="password"] {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        #chat {
+            display: none;
+            margin-top: 20px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+        }
+
+        #chat-container {
+            display: flex;
+            gap: 20px;
+        }
+
+        #messages {
+            flex: 3;
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+
+        #online-users {
+            flex: 1;
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+        .message {
+            margin: 10px 0;
+            padding: 8px;
+            border-radius: 4px;
+        }
+
+        .message.system {
+            background-color: #e3f2fd;
+            color: #1976d2;
+            font-style: italic;
+        }
+
+        .message.presence {
+            background-color: #f0f4c3;
+            color: #827717;
+        }
+
+        .message.user {
+            background-color: #e8f5e9;
+            border-left: 3px solid #4CAF50;
+            padding-left: 10px;
+        }
+
+        .message.error {
+            background-color: #ffebee;
+            border-left: 3px solid #f44336;
+            padding-left: 10px;
+        }
+
+        .username {
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
+        .timestamp {
+            font-size: 0.8em;
+            color: #7f8c8d;
+            margin-left: 10px;
+        }
+
+        #message-input {
+            display: flex;
+            gap: 10px;
+        }
+
+        #message {
+            flex: 1;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+    </style>
 </head>
 
 <body>
-    <div id="login">
-        <input type="text" id="username" placeholder="Username">
-        <input type="password" id="password" placeholder="Password">
-        <button onclick="login()">Login</button>
+    <div id="auth-forms">
+        <div class="auth-form">
+            <h2>Register</h2>
+            <input type="text" id="reg-username" placeholder="Username">
+            <input type="password" id="reg-password" placeholder="Password">
+            <button onclick="register()">Register</button>
+        </div>
+
+        <div class="auth-form">
+            <h2>Login</h2>
+            <input type="text" id="login-username" placeholder="Username">
+            <input type="password" id="login-password" placeholder="Password">
+            <button onclick="login()">Login</button>
+        </div>
     </div>
-    <div id="chat" style="display: none;">
-        <div id="messages"></div>
-        <input type="text" id="message" placeholder="Type a message...">
-        <button onclick="sendMessage()">Send</button>
+
+    <div id="chat">
+        <div id="chat-container">
+            <div id="messages"></div>
+            <div id="online-users">
+                <h3>Online Users (<span id="online-count">0</span>)</h3>
+                <div id="user-list"></div>
+            </div>
+        </div>
+        <div id="message-input">
+            <input type="text" id="message" placeholder="Type a message..." onkeyup="handleKeyPress(event)">
+            <button onclick="sendMessage()">Send</button>
+        </div>
     </div>
 
     <script>
         let ws;
         let token;
+        let currentUsername;
+
+        async function register() {
+            const username = document.getElementById('reg-username').value;
+            const password = document.getElementById('reg-password').value;
+
+            const response = await fetch('/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `username=${username}&password=${password}`
+            });
+
+            if (response.status === 201) {
+                alert('Registration successful! Please login.');
+            } else {
+                const error = await response.text();
+                alert(`Registration failed: ${error}`);
+            }
+        }
 
         async function login() {
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
+            const username = document.getElementById('login-username').value;
+            const password = document.getElementById('login-password').value;
 
             const response = await fetch('/login', {
                 method: 'POST',
@@ -38,30 +202,88 @@
 
             const data = await response.json();
             token = data.token;
-            document.getElementById('login').style.display = 'none';
+            currentUsername = username;
+
+            document.getElementById('auth-forms').style.display = 'none';
             document.getElementById('chat').style.display = 'block';
 
-            // Connect to WebSocket with token
-            ws = new WebSocket(`ws://localhost/ws?token=${token}`);
+            // Connect to WebSocket with current host
+            const host = window.location.host;
+            ws = new WebSocket(`ws://${host}/ws?token=${token}`);
+
             ws.onmessage = (event) => {
                 const msg = JSON.parse(event.data);
-                const messages = document.getElementById('messages');
-                var username = ""
-                if (msg.type !== "system") {
-                    username = msg.username
-                }
-                if (username !== "") {
-                    messages.innerHTML += `<p><strong>${username}</strong>: ${msg.content}</p>`;
-                } else {
-                    messages.innerHTML += `<p><strong>${msg.content}</strong></p>`;
-                }
+                addMessageToChat(msg);
             };
+
+            // Update online users every 1 second
+            setInterval(updateOnlineUsers, 1000);
+            updateOnlineUsers();
+        }
+
+        function addMessageToChat(msg) {
+            const messages = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${msg.type}`;
+
+            let content = '';
+            switch (msg.type) {
+                case 'system':
+                    content = `<span class="system-message">${msg.content}</span>`;
+                    break;
+                case 'presence':
+                    content = `<span class="presence-message">${msg.username} ${msg.action === 'join' ? 'joined' : 'left'}</span>`;
+                    updateOnlineUsers();
+                    break;
+                case 'message':
+                    content = `
+                        <span class="username">${msg.username}</span>
+                        <span class="content">${msg.content}</span>
+                    `;
+                    break;
+                case 'error':
+                    content = `<span class="error-message">Error: ${msg.content}</span>`;
+                    break;
+            }
+
+            messageDiv.innerHTML = `
+                ${content}
+                <span class="timestamp">${new Date(msg.time).toLocaleTimeString()}</span>
+            `;
+
+            messages.appendChild(messageDiv);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        async function updateOnlineUsers() {
+            try {
+                const response = await fetch('/online-users');
+                const data = await response.json();
+
+                document.getElementById('online-count').textContent = data.count;
+                const userList = document.getElementById('user-list');
+                userList.innerHTML = data.users.map(user =>
+                    `<div class="user">${user}</div>`
+                ).join('');
+            } catch (error) {
+                console.error('Failed to update online users:', error);
+            }
         }
 
         function sendMessage() {
-            const message = document.getElementById('message').value;
-            ws.send(message);
-            document.getElementById('message').value = '';
+            const messageInput = document.getElementById('message');
+            const message = messageInput.value.trim();
+
+            if (message) {
+                ws.send(message);
+                messageInput.value = '';
+            }
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
         }
     </script>
 </body>

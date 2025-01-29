@@ -82,3 +82,14 @@ func Login(ctx context.Context, redis *redis.Client, username string, password s
 
 	return bcrypt.CompareHashAndPassword(hash, []byte(password))
 }
+
+func DeletUserCredentials(ctx context.Context, redis *redis.Client, username string) error {
+	if err := redis.HDel(ctx, "user_credentials", username).Err(); err != nil {
+		return fmt.Errorf("user not found")
+	}
+
+	if err := redis.SRem(ctx, "users", username).Err(); err != nil {
+		return fmt.Errorf("user not found")
+	}
+	return nil
+}

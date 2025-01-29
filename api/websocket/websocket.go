@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/hamidoujand/gocci/internal/auth"
@@ -14,8 +15,16 @@ import (
 )
 
 const (
-	systemMessage = "system"
-	userMessage   = "message"
+	systemMessage   = "system"
+	userMessage     = "message"
+	presenceMessage = "presence"
+	errorMessage    = "error"
+)
+
+const (
+	joinAction      = "join"
+	leftAction      = "left"
+	broadcastAction = "broadcast"
 )
 
 var upgrader = websocket.Upgrader{
@@ -40,6 +49,15 @@ type Pool struct {
 	pubsub  *redis.PubSub
 	channel string
 	jwtKey  string
+}
+
+type message struct {
+	Type     string    `json:"type"`     // message|presence|system|error
+	Action   string    `json:"action"`   // join|leave
+	Username string    `json:"username"` //sender
+	Content  string    `json:"content"`  // payload
+	Time     time.Time `json:"time"`     //server timestamp
+	Users    []string  `json:"users"`    //online users
 }
 
 // NewPool creates a new pool.
@@ -90,23 +108,39 @@ func (p *Pool) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		p.publishMessages(r.Context(), client.username, string(msg), userMessage)
+		p.publishMessage(r.Context(), userMessage, broadcastAction, client.username, string(msg))
 	}
 }
 
-func (p *Pool) publishMessages(ctx context.Context, username, message string, msgType string) {
-	msg := map[string]string{
-		"type":     msgType,
-		"username": username,
-		"content":  message,
+func (p *Pool) publishMessage(ctx context.Context, msgType, action, username, content string) {
+	msg := message{
+		Type:     msgType,
+		Action:   action,
+		Username: username,
+		Content:  content,
+		Time:     time.Now(),
 	}
 
-	bs, _ := json.Marshal(msg)
+	if msgType == presenceMessage {
+		users, err := p.getOnlineUsers(ctx)
+		if err != nil {
+			p.publishMessage(ctx, errorMessage, broadcastAction, username, err.Error())
+			return
+		}
+		msg.Users = users
+	}
 
-	// When a message is received from a client, it’s published to Redis.
-	// All server instances subscribed to the Redis channel receive the message and broadcast it to their local clients.
+	bs, err := json.Marshal(msg)
+	if err != nil {
+		p.log.Error("marshaling message", "err", err)
+		p.publishMessage(ctx, errorMessage, broadcastAction, username, err.Error())
+
+		return
+	}
+
 	if err := p.redis.Publish(ctx, p.channel, bs).Err(); err != nil {
-		p.log.Error("publish message", "err", err.Error())
+		p.publishMessage(ctx, errorMessage, broadcastAction, username, err.Error())
+		p.log.Error("publish message to redis", "err", err.Error())
 	}
 }
 
@@ -118,7 +152,7 @@ func (p *Pool) addClient(ctx context.Context, client *Client) {
 	//add user to redis set
 	p.redis.SAdd(ctx, "online_users", client.username)
 	//also broadcast it
-	p.publishMessages(ctx, client.username, fmt.Sprintf("%s, joined the chat", client.username), systemMessage)
+	p.publishMessage(ctx, systemMessage, joinAction, client.username, fmt.Sprintf("%s, joined the chat", client.username))
 	p.log.Info("add client", "status", fmt.Sprintf("new client %s added", client.conn.RemoteAddr().String()))
 }
 
@@ -128,9 +162,20 @@ func (p *Pool) deleteClient(ctx context.Context, client *Client) {
 	delete(p.clients, client)
 
 	//remove the user from redis set
-	p.redis.SRem(ctx, "online_users", client.username)
+	if err := p.redis.SRem(ctx, "online_users", client.username).Err(); err != nil {
+		p.log.Error("removing client from online_users", "err", err)
+		p.publishMessage(ctx, errorMessage, broadcastAction, client.username, err.Error())
+		return
+	}
 	//also broadcast a system message
-	p.publishMessages(ctx, client.username, fmt.Sprintf("%s left the chat", client.username), systemMessage)
+	p.publishMessage(ctx, systemMessage, leftAction, client.username, fmt.Sprintf("%s left the chat", client.username))
+	//also delete from redis
+	if err := auth.DeletUserCredentials(ctx, p.redis, client.username); err != nil {
+		p.log.Error("failed to delete user credentials", "err", err)
+		p.publishMessage(ctx, errorMessage, broadcastAction, client.username, err.Error())
+
+		return
+	}
 	p.log.Info("delete client", "status", fmt.Sprintf("client %s removed", client.conn.RemoteAddr().String()))
 }
 
@@ -198,21 +243,25 @@ func (p *Pool) Register(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 
 	if username == "" || password == "" || len(password) < 4 {
-		http.Error(w, "username can not be empty and password must be greater that 4", http.StatusBadRequest)
+		http.Error(w, "username can not be empty and password must be greater than 4", http.StatusBadRequest)
 		return
 	}
 
 	if err := auth.RegisterUser(r.Context(), p.redis, username, password); err != nil {
 		p.log.Error("register failed", "err", err)
-		http.Error(w, "regiser failed", http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("registeration failed: %s", err), http.StatusBadRequest)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
 }
 
+func (p *Pool) getOnlineUsers(ctx context.Context) ([]string, error) {
+	return p.redis.SMembers(ctx, "online_users").Result()
+}
+
 func (p *Pool) OnlineUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := p.redis.SMembers(r.Context(), "users").Result()
+	users, err := p.getOnlineUsers(r.Context())
 	if err != nil {
 		p.log.Error("getting online users", "err", err)
 		http.Error(w, "failed to get online users", http.StatusInternalServerError)
