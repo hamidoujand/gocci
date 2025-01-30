@@ -37,7 +37,7 @@ Gocci is a distributed real-time chat application built with Go, Redis pub/sub, 
 ### Installation
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/gocci.git
+git clone https://github.com/hamidoujand/gocci.git
 cd gocci
 
 
