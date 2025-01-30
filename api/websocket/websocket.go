@@ -51,6 +51,7 @@ type Pool struct {
 	jwtKey  string
 }
 
+// message is the general struct that goes to client.
 type message struct {
 	Type     string    `json:"type"`     // message|presence|system|error
 	Action   string    `json:"action"`   // join|leave
@@ -260,6 +261,7 @@ func (p *Pool) getOnlineUsers(ctx context.Context) ([]string, error) {
 	return p.redis.SMembers(ctx, "online_users").Result()
 }
 
+// OnlineUsers is the handler responsible for returning the online users to the client.
 func (p *Pool) OnlineUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := p.getOnlineUsers(r.Context())
 	if err != nil {

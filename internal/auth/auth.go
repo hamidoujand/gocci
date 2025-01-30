@@ -10,16 +10,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-type User struct {
-	Username     string `json:"username"`
-	PasswordHash string `json:"password_hash"`
-}
-
-type Claims struct {
-	Username string `json:"username"`
-	jwt.RegisteredClaims
-}
-
+// GenerateToken generates the jwt token.
 func GenerateToken(username string, jwtKey string) (string, error) {
 	claims := Claims{
 		Username: username,
@@ -37,6 +28,7 @@ func GenerateToken(username string, jwtKey string) (string, error) {
 	return str, nil
 }
 
+// ValidateToken validate the given jwt token against the given secret key and returns the parsed claims.
 func ValidateToken(tokenString string, jwtKey string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
 		return []byte(jwtKey), nil
@@ -53,6 +45,7 @@ func ValidateToken(tokenString string, jwtKey string) (*Claims, error) {
 	return claims, nil
 }
 
+// RegisterUser registers a user into redis.
 func RegisterUser(ctx context.Context, redis *redis.Client, username string, password string) error {
 	if exists := redis.SIsMember(ctx, "users", username).Val(); exists {
 		return fmt.Errorf("username %q, already taken", username)
@@ -74,6 +67,7 @@ func RegisterUser(ctx context.Context, redis *redis.Client, username string, pas
 	return nil
 }
 
+// Login validates user and password against the hash password.
 func Login(ctx context.Context, redis *redis.Client, username string, password string) error {
 	hash, err := redis.HGet(ctx, "user_credentials", username).Bytes()
 	if err != nil {
@@ -83,6 +77,7 @@ func Login(ctx context.Context, redis *redis.Client, username string, password s
 	return bcrypt.CompareHashAndPassword(hash, []byte(password))
 }
 
+// DeleteUserCredentials deletes a user when the user left the chat.
 func DeletUserCredentials(ctx context.Context, redis *redis.Client, username string) error {
 	if err := redis.HDel(ctx, "user_credentials", username).Err(); err != nil {
 		return fmt.Errorf("user not found")
